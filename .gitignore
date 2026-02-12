@@ -1,0 +1,14 @@
+# Binaries
+smtptunnel-server
+smtptunnel-client
+dist/server
+dist/client
+test/server
+test/client
+
+# Logs
+*.log
+test/*.log
+
+# OS files
+.DS_Store
