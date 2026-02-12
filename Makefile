@@ -13,6 +13,8 @@ install: build
 	cp smtptunnel-server /usr/local/bin/
 	cp smtptunnel-client /usr/local/bin/
 	mkdir -p /etc/smtptunnel
+	mkdir -p /etc/smtptunnel/configs
+	mkdir -p /etc/smtptunnel/certs
 	@if [ ! -f /etc/smtptunnel/config.toml ]; then \
 		cp config.toml /etc/smtptunnel/config.toml; \
 		echo "Installed default config to /etc/smtptunnel/config.toml"; \

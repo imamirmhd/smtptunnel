@@ -42,14 +42,15 @@ type UserEntry struct {
 
 // ClientConfig holds client-side settings.
 type ClientConfig struct {
-	Server             string        `toml:"server"`
-	Username           string        `toml:"username"`
-	Secret             string        `toml:"secret"`
-	CACert             string        `toml:"ca_cert"`
-	InsecureSkipVerify bool          `toml:"insecure_skip_verify"`
-	ReconnectDelay     Duration      `toml:"reconnect_delay"`
-	MaxReconnectDelay  Duration      `toml:"max_reconnect_delay"`
-	Socks              []SocksEntry  `toml:"socks"`
+	Server             string         `toml:"server"`
+	Username           string         `toml:"username"`
+	Secret             string         `toml:"secret"`
+	CACert             string         `toml:"ca_cert"`
+	InsecureSkipVerify bool           `toml:"insecure_skip_verify"`
+	ReconnectDelay     Duration       `toml:"reconnect_delay"`
+	MaxReconnectDelay  Duration       `toml:"max_reconnect_delay"`
+	Socks              []SocksEntry   `toml:"socks"`
+	Forward            []ForwardEntry `toml:"forward"`
 }
 
 // SocksEntry defines a single SOCKS5 listener.
@@ -57,6 +58,13 @@ type SocksEntry struct {
 	Listen   string `toml:"listen"`
 	Username string `toml:"username"`
 	Password string `toml:"password"`
+}
+
+// ForwardEntry defines a port-forwarding rule.
+type ForwardEntry struct {
+	Listen   string `toml:"listen"`
+	Forward  string `toml:"forward"`
+	Protocol string `toml:"protocol"` // "tcp" or "udp"
 }
 
 // StealthConfig controls DPI evasion features.
@@ -145,8 +153,23 @@ func (c *Config) Validate(mode string) error {
 		if c.Client.Secret == "" {
 			return fmt.Errorf("client.secret is required")
 		}
-		if len(c.Client.Socks) == 0 {
-			return fmt.Errorf("at least one [[client.socks]] entry is required")
+		if len(c.Client.Socks) == 0 && len(c.Client.Forward) == 0 {
+			return fmt.Errorf("at least one [[client.socks]] or [[client.forward]] entry is required")
+		}
+		for i, f := range c.Client.Forward {
+			if f.Listen == "" {
+				return fmt.Errorf("client.forward[%d].listen is required", i)
+			}
+			if f.Forward == "" {
+				return fmt.Errorf("client.forward[%d].forward is required", i)
+			}
+			proto := f.Protocol
+			if proto == "" {
+				proto = "tcp"
+			}
+			if proto != "tcp" && proto != "udp" {
+				return fmt.Errorf("client.forward[%d].protocol must be 'tcp' or 'udp'", i)
+			}
 		}
 	}
 	return nil
@@ -197,6 +220,12 @@ max_reconnect_delay = "30s"
 listen = "127.0.0.1:1080"
 username = ""
 password = ""
+
+# Port forwarding (alternative to SOCKS)
+# [[client.forward]]
+# listen = "127.0.0.1:8080"
+# forward = "internal-server:80"
+# protocol = "tcp"  # or "udp"
 
 [stealth]
 enabled = true

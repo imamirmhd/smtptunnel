@@ -1,4 +1,4 @@
-// smtptunnel-client: SMTP Tunnel Client with SOCKS5 proxy, ping, and diagnostics.
+// smtptunnel-client: SMTP Tunnel Client with SOCKS5 proxy, port forwarding, and diagnostics.
 package main
 
 import (
@@ -13,11 +13,13 @@ import (
 
 	"smtptunnel/internal/config"
 	"smtptunnel/internal/debug"
+	"smtptunnel/internal/forward"
+	"smtptunnel/internal/service"
 	"smtptunnel/internal/socks5"
 	"smtptunnel/internal/tunnel"
 )
 
-const version = "2.0.0"
+const version = "2.1.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -37,8 +39,12 @@ func main() {
 		cmdStatus()
 	case "check-config":
 		cmdCheckConfig()
-	case "install-service":
-		cmdInstallService()
+	case "install":
+		cmdInstall()
+	case "wizard":
+		cmdWizard()
+	case "service":
+		cmdService()
 	case "version":
 		fmt.Printf("smtptunnel-client %s\n", version)
 	case "help", "--help", "-h":
@@ -57,12 +63,22 @@ Usage:
   smtptunnel-client <command> [options]
 
 Commands:
-  run              Connect and start SOCKS proxies
+  run              Connect and start SOCKS/forward proxies
   ping             Test latency to server
   status           Connection diagnostics
   check-config     Validate configuration file
-  install-service  Install systemd service
+  install          Install binary and create directories
+  wizard           Interactive configuration generator
+  service          Manage systemd services
   version          Show version
+
+Service subcommands:
+  service install <config.toml>   Register config as systemd service
+  service list                    List registered services
+  service remove <name>           Remove a service
+  service logs <name> [-n lines]  View service logs
+  service stop <name>             Stop a service
+  service restart <name>          Restart a service
 
 `, version)
 }
@@ -150,6 +166,7 @@ func cmdRun() {
 
 		// Start SOCKS5 servers
 		var socksServers []*socks5.Server
+		var forwarders []*forward.Forwarder
 		var wg sync.WaitGroup
 
 		for _, s := range cfg.Client.Socks {
@@ -171,12 +188,41 @@ func cmdRun() {
 			}(srv)
 		}
 
+		// Start forwarders
+		for _, f := range cfg.Client.Forward {
+			proto := f.Protocol
+			if proto == "" {
+				proto = "tcp"
+			}
+			fwd := &forward.Forwarder{
+				ListenAddr:  f.Listen,
+				ForwardAddr: f.Forward,
+				Protocol:    proto,
+				Tunnel:      client,
+				Logger:      logger,
+			}
+			forwarders = append(forwarders, fwd)
+
+			wg.Add(1)
+			go func(fwd *forward.Forwarder) {
+				defer wg.Done()
+				if err := fwd.ListenAndServe(); err != nil {
+					logger.Printf("Forward error: %v", err)
+				}
+			}(fwd)
+		}
+
 		// Wait for connection to drop
 		<-done
 
 		// Close SOCKS servers
 		for _, srv := range socksServers {
 			srv.Close()
+		}
+
+		// Close forwarders
+		for _, fwd := range forwarders {
+			fwd.Close()
 		}
 
 		client.Disconnect()
@@ -230,29 +276,98 @@ func cmdCheckConfig() {
 	fmt.Print(debug.CheckConfig(*configPath, "client"))
 }
 
-func cmdInstallService() {
-	service := `[Unit]
-Description=SMTP Tunnel Client
-After=network-online.target
-Wants=network-online.target
+func cmdInstall() {
+	fmt.Println("Installing smtptunnel-client...")
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/smtptunnel-client run -c /etc/smtptunnel/config.toml
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
+	if err := service.EnsureDirectories(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating directories: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Created /etc/smtptunnel, /etc/smtptunnel/configs, /etc/smtptunnel/certs")
 
-[Install]
-WantedBy=multi-user.target
-`
-	path := "/etc/systemd/system/smtptunnel-client.service"
-	if err := os.WriteFile(path, []byte(service), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
+	if err := service.InstallBinary("smtptunnel-client"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error installing binary: %v\n", err)
 		fmt.Println("You may need to run as root.")
 		os.Exit(1)
 	}
-	fmt.Printf("Service file written to %s\n", path)
-	fmt.Println("Run: systemctl daemon-reload && systemctl enable --now smtptunnel-client")
+
+	fmt.Println("Installation complete!")
+}
+
+func cmdWizard() {
+	if err := service.RunClientWizard(); err != nil {
+		fmt.Fprintf(os.Stderr, "Wizard error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func cmdService() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: smtptunnel-client service <install|list|remove|logs|stop|restart> [args]")
+		os.Exit(1)
+	}
+
+	subcmd := os.Args[1]
+	os.Args = append(os.Args[:1], os.Args[2:]...)
+
+	switch subcmd {
+	case "install":
+		if len(os.Args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: smtptunnel-client service install <config.toml>")
+			os.Exit(1)
+		}
+		if err := service.Install(os.Args[1], "client"); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "list":
+		if err := service.List(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "remove":
+		if len(os.Args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: smtptunnel-client service remove <name>")
+			os.Exit(1)
+		}
+		if err := service.Remove(os.Args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "logs":
+		if len(os.Args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: smtptunnel-client service logs <name> [-n lines]")
+			os.Exit(1)
+		}
+		name := os.Args[1]
+		lines := 50
+		fs := flag.NewFlagSet("logs", flag.ExitOnError)
+		fs.IntVar(&lines, "n", 50, "Number of lines")
+		fs.Parse(os.Args[2:])
+		if err := service.Logs(name, lines); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "stop":
+		if len(os.Args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: smtptunnel-client service stop <name>")
+			os.Exit(1)
+		}
+		if err := service.Stop(os.Args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "restart":
+		if len(os.Args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: smtptunnel-client service restart <name>")
+			os.Exit(1)
+		}
+		if err := service.Restart(os.Args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown service command: %s\n", subcmd)
+		os.Exit(1)
+	}
 }
