@@ -1,0 +1,35 @@
+[server]
+  listen = "127.0.0.1:5870"
+  hostname = "localhost"
+  cert_file = "test/server.crt"
+  key_file = "test/server.key"
+  log_level = "info"
+  [server.tls]
+    min_version = "1.2"
+
+  [[server.users]]
+    username = "testuser"
+    secret = "testsecret"
+    whitelist = ["0.0.0.0/0"]
+    logging = true
+
+[client]
+  server = "127.0.0.1:5870"
+  username = "testuser"
+  secret = "testsecret"
+  ca_cert = "test/ca.crt"
+  insecure_skip_verify = false
+  reconnect_delay = "2s"
+  max_reconnect_delay = "30s"
+
+  [[client.socks]]
+    listen = "127.0.0.1:10800"
+    username = "testuser"
+    password = ""
+
+[stealth]
+  enabled = true
+  min_delay_ms = 50
+  max_delay_ms = 500
+  padding_sizes = [4096, 8192, 16384, 32768]
+  dummy_probability = 0.1

@@ -1,0 +1,30 @@
+[server]
+  listen = "0.0.0.0:587"
+  hostname = "mail.example.com"
+  cert_file = "server.crt"
+  key_file = "server.key"
+  log_level = "info"
+  users = []
+  [server.tls]
+    min_version = "1.2"
+
+[client]
+  server = "mail.example.com:587"
+  username = ""
+  secret = ""
+  ca_cert = "ca.crt"
+  insecure_skip_verify = false
+  reconnect_delay = "2s"
+  max_reconnect_delay = "30s"
+
+  [[client.socks]]
+    listen = "127.0.0.1:1080"
+    username = ""
+    password = ""
+
+[stealth]
+  enabled = true
+  min_delay_ms = 50
+  max_delay_ms = 500
+  padding_sizes = [4096, 8192, 16384, 32768]
+  dummy_probability = 0.1
